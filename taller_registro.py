@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import sqlite3
 from datetime import datetime
 
@@ -150,10 +150,21 @@ class App(tk.Tk):
         ListaVentana(self)
 
 class ListaVentana(tk.Toplevel):
+    COLS = ("id", "fecha", "nombre", "patente", "telefono", "descripcion")
+    HEADERS = {
+        "id": "ID",
+        "fecha": "Fecha",
+        "nombre": "Nombre y Apellido",
+        "patente": "Patente",
+        "telefono": "Teléfono",
+        "descripcion": "Descripción"
+    }
+    WIDTHS = {"id": 50, "fecha": 130, "nombre": 200, "patente": 110, "telefono": 140, "descripcion": 300}
+
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Trabajos guardados")
-        self.geometry("920x460")
+        self.geometry("980x520")
         self.resizable(True, True)
 
         frm_filtros = ttk.Frame(self, padding=(10, 8))
@@ -167,24 +178,23 @@ class ListaVentana(tk.Toplevel):
         self.f_tel.grid(row=0, column=3)
 
         ttk.Button(frm_filtros, text="Buscar", command=self.refrescar).grid(row=0, column=4, padx=8)
-        ttk.Button(frm_filtros, text="Limpiar", command=self.limpiar_filtros).grid(row=0, column=5)
+        ttk.Button(frm_filtros, text="Limpiar", command=self.limpiar_filtros).grid(row=0, column=5, padx=(0,8))
 
-        columnas = ("id", "fecha", "nombre", "patente", "telefono", "descripcion")
-        self.tree = ttk.Treeview(self, columns=columnas, show="headings", height=14)
+        # Exportar: menú de opciones (CSV / Excel)
+        export_menu = ttk.Menubutton(frm_filtros, text="Exportar")
+        menu = tk.Menu(export_menu, tearoff=0)
+        menu.add_command(label="CSV (.csv)", command=self.exportar_csv)
+        menu.add_command(label="Excel (.xlsx)", command=self.exportar_excel)
+        export_menu["menu"] = menu
+        export_menu.grid(row=0, column=6, padx=(12, 0))
+
+        # Tabla
+        self.tree = ttk.Treeview(self, columns=self.COLS, show="headings", height=16)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        headers = {
-            "id": "ID",
-            "fecha": "Fecha",
-            "nombre": "Nombre y Apellido",
-            "patente": "Patente",
-            "telefono": "Teléfono",
-            "descripcion": "Descripción"
-        }
-        widths = {"id": 50, "fecha": 130, "nombre": 200, "patente": 110, "telefono": 140, "descripcion": 300}
-        for col in columnas:
-            self.tree.heading(col, text=headers[col])
-            self.tree.column(col, width=widths[col], anchor="w")
+        for col in self.COLS:
+            self.tree.heading(col, text=self.HEADERS[col])
+            self.tree.column(col, width=self.WIDTHS[col], anchor="w")
 
         # Botonera inferior: Editar / Borrar
         frm_bot = ttk.Frame(self, padding=(10, 6))
@@ -198,6 +208,20 @@ class ListaVentana(tk.Toplevel):
         # Doble click abre edición también
         self.tree.bind("<Double-1>", self.on_doble_click)
 
+    # ---------- helpers ----------
+    def _rows_actuales(self):
+        """Toma lo que está visible en el Treeview (filtrado) y lo devuelve como lista de tuplas."""
+        data = []
+        for iid in self.tree.get_children():
+            vals = self.tree.item(iid, "values")
+            data.append(vals)
+        return data
+
+    def _default_filename(self, ext):
+        fecha = datetime.now().strftime("%Y%m%d_%H%M")
+        return f"trabajos_{fecha}.{ext}"
+
+    # ---------- acciones tabla ----------
     def refrescar(self):
         for row in self.tree.get_children():
             self.tree.delete(row)
@@ -245,6 +269,90 @@ class ListaVentana(tk.Toplevel):
                 messagebox.showinfo("Eliminado", "Registro borrado correctamente.")
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo borrar.\n{e}")
+
+    # ---------- exportar ----------
+    def exportar_csv(self):
+        rows = self._rows_actuales()
+        if not rows:
+            messagebox.showinfo("Sin datos", "No hay filas para exportar (probá quitar filtros).")
+            return
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            initialfile=self._default_filename("csv"),
+            title="Guardar como CSV"
+        )
+        if not filepath:
+            return
+        try:
+            # Escribimos CSV manualmente para evitar dependencias
+            # Encabezados
+            headers = [self.HEADERS[c] for c in self.COLS]
+            with open(filepath, "w", encoding="utf-8", newline="") as f:
+                f.write(",".join(headers) + "\n")
+                # Filas
+                for r in rows:
+                    # Escapamos comas y saltos de línea con comillas
+                    safe = []
+                    for cell in r:
+                        text = str(cell).replace('"', '""')
+                        safe.append(f'"{text}"')
+                    f.write(",".join(safe) + "\n")
+            messagebox.showinfo("Exportado", f"Exportado correctamente a:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Error al exportar", f"No se pudo exportar CSV.\n{e}")
+
+    def exportar_excel(self):
+        rows = self._rows_actuales()
+        if not rows:
+            messagebox.showinfo("Sin datos", "No hay filas para exportar (probá quitar filtros).")
+            return
+        try:
+            import openpyxl
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            if messagebox.askyesno(
+                "openpyxl no encontrado",
+                "Para exportar a Excel necesitás el paquete 'openpyxl'.\n"
+                "¿Querés exportar a CSV en su lugar?"
+            ):
+                self.exportar_csv()
+            return
+
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialfile=self._default_filename("xlsx"),
+            title="Guardar como Excel"
+        )
+        if not filepath:
+            return
+
+        try:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Trabajos"
+
+            # Encabezados
+            headers = [self.HEADERS[c] for c in self.COLS]
+            ws.append(headers)
+
+            # Filas
+            for r in rows:
+                ws.append(list(r))
+
+            # Ancho de columnas automático aproximado
+            for col_idx, header in enumerate(headers, start=1):
+                max_len = len(header)
+                for row in rows:
+                    v = str(row[col_idx - 1]) if row[col_idx - 1] is not None else ""
+                    max_len = max(max_len, len(v))
+                ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 60)
+
+            wb.save(filepath)
+            messagebox.showinfo("Exportado", f"Exportado correctamente a:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Error al exportar", f"No se pudo exportar Excel.\n{e}")
 
 class EditarVentana(tk.Toplevel):
     def __init__(self, parent, reg_id: int, row_tuple, on_saved=None):
